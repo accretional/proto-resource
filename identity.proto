@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package identifier;
+
+option go_package = "github.com/accretional/proto-resource/pb";
+
+message Identity {
+  // Identity name according to the provider
+  // TODO - maybe this or name should instead be URI?
+  string id = 1;
+  // Local identity the user wishes to authenticate as here. Can be the same as id
+  string name = 2;
+  oneof provider {
+    Identity local_authority = 3;
+    Identity remote_authority = 4;
+    string secret = 5;
+  }
+}
