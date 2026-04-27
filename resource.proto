@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package resource;
+
+option go_package = "github.com/accretional/proto-resource/pb";
+
+// "Files" are a confusing name to many users since they're generally assumed to be static content hosted on a file system. So, our "files" are called Resources, and Resources have a numeric "id" like an fd.
+// Resources mainly differ from traditional fd-based files in that their ids are persistent, they are typed if possible, and they may be handled in a distributed environment or database rather than a regular filesystem.
+message Resource {
+  int64 id = 1;
+  string name = 2;
+  // May correspond to a system resource or upstream Session.
+  repeated Resource owners = 3;
+  // URI that resolves to a FileDescriptorProto for the Resource.
+  string type = 4;
+}
