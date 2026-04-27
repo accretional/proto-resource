@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package resource;
+
+option go_package = "github.com/accretional/proto-resource/pb";
+
+import "google/protobuf/descriptor.proto";
+
+// OpenMode specifies the authorized interactions within the scope of an open session
+enum OpenMode {
+  OPEN_MODE_UNKNOWN = 0;
+  READ = 1;      // OREAD - open for reading
+  WRITE = 2;     // OWRITE - open for writing
+  EXEC = 3;      // OEXEC - open for execution
+  WTRUNC = 4;    // OTRUNC - truncate file on open, ie rewrite/set it
+  RCLOSE = 5;    // ORCLOSE - remove file on close, ie it only exists within this session
+}
