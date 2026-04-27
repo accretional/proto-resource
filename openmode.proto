@@ -4,8 +4,6 @@ package resource;
 
 option go_package = "github.com/accretional/proto-resource/pb";
 
-import "google/protobuf/descriptor.proto";
-
 // OpenMode specifies the authorized interactions within the scope of an open session
 enum OpenMode {
   OPEN_MODE_UNKNOWN = 0;
