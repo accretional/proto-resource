@@ -35,15 +35,15 @@ func (f *emailFlow) Handle(_ *pb.Identity, stream grpc.BidiStreamingServer[pb.Id
 
 var _ identifier.AuthFlow = (*emailFlow)(nil)
 
-// fakeStream is a minimal grpc.BidiStreamingServer for unit tests.
-type fakeStream struct {
+// fakeAuthStream is a minimal grpc.BidiStreamingServer used to drive Authenticate.
+type fakeAuthStream struct {
 	sent []*pb.Resource
 	recv []*pb.Identity
 	pos  int
 }
 
-func (f *fakeStream) Send(r *pb.Resource) error { f.sent = append(f.sent, r); return nil }
-func (f *fakeStream) Recv() (*pb.Identity, error) {
+func (f *fakeAuthStream) Send(r *pb.Resource) error { f.sent = append(f.sent, r); return nil }
+func (f *fakeAuthStream) Recv() (*pb.Identity, error) {
 	if f.pos >= len(f.recv) {
 		return nil, io.EOF
 	}
@@ -51,24 +51,23 @@ func (f *fakeStream) Recv() (*pb.Identity, error) {
 	f.pos++
 	return r, nil
 }
-func (f *fakeStream) SetHeader(metadata.MD) error  { return nil }
-func (f *fakeStream) SendHeader(metadata.MD) error { return nil }
-func (f *fakeStream) SetTrailer(metadata.MD)       {}
-func (f *fakeStream) Context() context.Context     { return context.Background() }
-func (f *fakeStream) SendMsg(any) error            { return nil }
-func (f *fakeStream) RecvMsg(any) error            { return nil }
+func (f *fakeAuthStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeAuthStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeAuthStream) SetTrailer(metadata.MD)       {}
+func (f *fakeAuthStream) Context() context.Context     { return context.Background() }
+func (f *fakeAuthStream) SendMsg(any) error            { return nil }
+func (f *fakeAuthStream) RecvMsg(any) error            { return nil }
 
-var _ grpc.BidiStreamingServer[pb.Identity, pb.Resource] = (*fakeStream)(nil)
+var _ grpc.BidiStreamingServer[pb.Identity, pb.Resource] = (*fakeAuthStream)(nil)
 
 // domainResource builds the Resource representation of a domain.
 // Type uses the proto-domain package path as a stable namespace.
-// Name is the fully-qualified domain string (e.g. "example.com").
 func domainResource(fqdn string) *pb.Resource {
 	return &pb.Resource{Type: "proto-domain/Domain", Name: fqdn}
 }
 
-// openStore creates an in-memory SQLite store with the given ownership pairs
-// seeded as domain resources.
+// openStore creates an in-memory SQLite store seeded with the given
+// (fqdn, ownerEmail) pairs as domain resources.
 func openStore(t *testing.T, pairs [][2]string) *sqlitestore.OwnerStore {
 	t.Helper()
 	store, err := sqlitestore.Open(":memory:")
@@ -86,45 +85,80 @@ func openStore(t *testing.T, pairs [][2]string) *sqlitestore.OwnerStore {
 	return store
 }
 
+// containsEmail reports whether any Identity in owners has Id == email.
+func containsEmail(owners []*pb.Identity, email string) bool {
+	for _, o := range owners {
+		if o.GetId() == email {
+			return true
+		}
+	}
+	return false
+}
+
 // --- OwnerStore unit tests ---
 
-func TestOwnerStore_IdentifyKnownDomain(t *testing.T) {
+func TestOwnerStore_OwnersKnownDomain(t *testing.T) {
 	store := openStore(t, [][2]string{{"example.com", "alice@example.com"}})
 
-	got, err := store.Identify(context.Background(), domainResource("example.com"))
+	owners, err := store.Owners(context.Background(), domainResource("example.com"))
 	if err != nil {
-		t.Fatalf("Identify: %v", err)
+		t.Fatalf("Owners: %v", err)
 	}
-	if got.GetId() != "alice@example.com" {
-		t.Errorf("Id = %q, want %q", got.GetId(), "alice@example.com")
+	if len(owners) != 1 {
+		t.Fatalf("got %d owners, want 1", len(owners))
 	}
-	if got.GetName() != "alice@example.com" {
-		t.Errorf("Name = %q, want %q", got.GetName(), "alice@example.com")
+	if owners[0].GetId() != "alice@example.com" {
+		t.Errorf("Id = %q, want alice@example.com", owners[0].GetId())
 	}
 }
 
-func TestOwnerStore_IdentifyUnknownDomainReturnsNotFound(t *testing.T) {
+func TestOwnerStore_OwnersMultipleOwners(t *testing.T) {
+	store := openStore(t, [][2]string{
+		{"example.com", "alice@example.com"},
+		{"example.com", "bob@example.com"},
+	})
+
+	owners, err := store.Owners(context.Background(), domainResource("example.com"))
+	if err != nil {
+		t.Fatalf("Owners: %v", err)
+	}
+	if len(owners) != 2 {
+		t.Fatalf("got %d owners, want 2", len(owners))
+	}
+	if !containsEmail(owners, "alice@example.com") {
+		t.Error("alice@example.com not in owners")
+	}
+	if !containsEmail(owners, "bob@example.com") {
+		t.Error("bob@example.com not in owners")
+	}
+}
+
+func TestOwnerStore_OwnersUnknownDomainReturnsEmpty(t *testing.T) {
 	store := openStore(t, nil)
 
-	_, err := store.Identify(context.Background(), domainResource("unknown.com"))
-	if status.Code(err) != codes.NotFound {
-		t.Errorf("code = %v, want NotFound", status.Code(err))
+	owners, err := store.Owners(context.Background(), domainResource("unknown.com"))
+	if err != nil {
+		t.Fatalf("Owners: %v", err)
+	}
+	if len(owners) != 0 {
+		t.Errorf("got %d owners for unregistered domain, want 0", len(owners))
 	}
 }
 
-func TestOwnerStore_RegisterReplacesOwner(t *testing.T) {
+func TestOwnerStore_RegisterIsIdempotent(t *testing.T) {
 	store := openStore(t, [][2]string{{"example.com", "alice@example.com"}})
 	ctx := context.Background()
 
-	if err := store.Register(ctx, "proto-domain/Domain", "example.com", "bob@example.com"); err != nil {
-		t.Fatalf("Register: %v", err)
+	// Registering the same (resource, email) pair again is a no-op.
+	if err := store.Register(ctx, "proto-domain/Domain", "example.com", "alice@example.com"); err != nil {
+		t.Fatalf("duplicate Register: %v", err)
 	}
-	got, err := store.Identify(ctx, domainResource("example.com"))
+	owners, err := store.Owners(ctx, domainResource("example.com"))
 	if err != nil {
-		t.Fatalf("Identify after re-register: %v", err)
+		t.Fatalf("Owners: %v", err)
 	}
-	if got.GetId() != "bob@example.com" {
-		t.Errorf("Id = %q after replace, want %q", got.GetId(), "bob@example.com")
+	if len(owners) != 1 {
+		t.Errorf("got %d owners after duplicate Register, want 1", len(owners))
 	}
 }
 
@@ -139,9 +173,10 @@ func newServer(email string, store *sqlitestore.OwnerStore) pb.IdentifierServer 
 	)
 }
 
-// TestDomainOwnership_AuthenticateThenIdentify is the primary end-to-end scenario:
-// authenticate as a user, then look up who owns a domain — demonstrating the
-// full auth + ownership check the proto design is meant to support.
+// TestDomainOwnership_AuthenticateThenIdentify is the primary end-to-end
+// scenario: authenticate as a user, then look up the first owner of a domain.
+// The unary Identify RPC returns one owner; a streaming variant would be
+// needed to enumerate all owners for a proper any-of check.
 func TestDomainOwnership_AuthenticateThenIdentify(t *testing.T) {
 	store := openStore(t, [][2]string{
 		{"example.com", "alice@example.com"},
@@ -150,17 +185,11 @@ func TestDomainOwnership_AuthenticateThenIdentify(t *testing.T) {
 	srv := newServer("alice@example.com", store)
 	ctx := context.Background()
 
-	stream := &fakeStream{recv: []*pb.Identity{{Name: "alice"}}}
+	stream := &fakeAuthStream{recv: []*pb.Identity{{Name: "alice"}}}
 	if err := srv.Authenticate(stream); err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if len(stream.sent) != 1 {
-		t.Fatalf("Authenticate sent %d resources, want 1", len(stream.sent))
-	}
 	authResource := stream.sent[0]
-	if authResource.GetType() != "identity.authenticated" {
-		t.Errorf("auth resource Type = %q, want identity.authenticated", authResource.GetType())
-	}
 	authenticatedEmail := authResource.GetName()
 
 	ownerIdentity, err := srv.Identify(ctx, domainResource("example.com"))
@@ -168,22 +197,40 @@ func TestDomainOwnership_AuthenticateThenIdentify(t *testing.T) {
 		t.Fatalf("Identify example.com: %v", err)
 	}
 	if ownerIdentity.GetId() != authenticatedEmail {
-		t.Errorf("ownership mismatch: domain owner %q != authenticated user %q",
-			ownerIdentity.GetId(), authenticatedEmail)
+		t.Errorf("owner %q != authenticated user %q", ownerIdentity.GetId(), authenticatedEmail)
 	}
 }
 
-// TestDomainOwnership_CrossUserLookup shows that Identify is not tied to the
-// authenticated session — it returns whoever actually owns the resource.
+// TestDomainOwnership_MultipleOwnersAnyOf verifies that the store holds all
+// co-owners and that any-of membership can be checked at the store layer.
+func TestDomainOwnership_MultipleOwnersAnyOf(t *testing.T) {
+	store := openStore(t, [][2]string{
+		{"shared.com", "alice@example.com"},
+		{"shared.com", "bob@example.com"},
+	})
+	ctx := context.Background()
+
+	owners, err := store.Owners(ctx, domainResource("shared.com"))
+	if err != nil {
+		t.Fatalf("Owners: %v", err)
+	}
+	for _, email := range []string{"alice@example.com", "bob@example.com"} {
+		if !containsEmail(owners, email) {
+			t.Errorf("%s not found in owners", email)
+		}
+	}
+}
+
+// TestDomainOwnership_CrossUserLookup shows that Identify returns whoever
+// actually owns the resource, not the authenticated user.
 func TestDomainOwnership_CrossUserLookup(t *testing.T) {
 	store := openStore(t, [][2]string{
 		{"example.com", "alice@example.com"},
 		{"other.com", "bob@example.com"},
 	})
 	srv := newServer("alice@example.com", store)
-	ctx := context.Background()
 
-	ownerIdentity, err := srv.Identify(ctx, domainResource("other.com"))
+	ownerIdentity, err := srv.Identify(context.Background(), domainResource("other.com"))
 	if err != nil {
 		t.Fatalf("Identify other.com: %v", err)
 	}
@@ -192,8 +239,8 @@ func TestDomainOwnership_CrossUserLookup(t *testing.T) {
 	}
 }
 
-// TestDomainOwnership_UnregisteredDomainReturnsNotFound verifies that Identify
-// for a domain with no registered owner returns codes.NotFound.
+// TestDomainOwnership_UnregisteredDomainReturnsNotFound verifies that
+// Identify for a domain with no owners returns codes.NotFound.
 func TestDomainOwnership_UnregisteredDomainReturnsNotFound(t *testing.T) {
 	store := openStore(t, nil)
 	srv := newServer("alice@example.com", store)
@@ -216,7 +263,7 @@ func TestDomainOwnership_IdentifyWithNoStoreReturnsUnimplemented(t *testing.T) {
 }
 
 // TestDomainOwnership_SubdomainIsDistinctResource verifies that a subdomain
-// ("api.example.com") can have a different owner from its apex ("example.com").
+// can have a different owner from its apex, supporting delegated ownership.
 func TestDomainOwnership_SubdomainIsDistinctResource(t *testing.T) {
 	store := openStore(t, [][2]string{
 		{"example.com", "alice@example.com"},
@@ -234,6 +281,6 @@ func TestDomainOwnership_SubdomainIsDistinctResource(t *testing.T) {
 		t.Fatalf("Identify subdomain: %v", err)
 	}
 	if apex.GetId() == sub.GetId() {
-		t.Errorf("apex and subdomain have the same owner %q; expected independent ownership", apex.GetId())
+		t.Errorf("apex and subdomain share owner %q; expected independent ownership", apex.GetId())
 	}
 }

@@ -78,5 +78,12 @@ func (s *identifierServer) Identify(ctx context.Context, req *pb.Resource) (*pb.
 	if s.ownerStore == nil {
 		return nil, status.Error(codes.Unimplemented, "Identify not configured")
 	}
-	return s.ownerStore.Identify(ctx, req)
+	owners, err := s.ownerStore.Owners(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(owners) == 0 {
+		return nil, status.Errorf(codes.NotFound, "no owner for %s/%s", req.GetType(), req.GetName())
+	}
+	return owners[0], nil
 }

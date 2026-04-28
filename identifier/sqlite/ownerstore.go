@@ -7,8 +7,6 @@ import (
 
 	"github.com/accretional/proto-resource/identifier"
 	"github.com/accretional/proto-resource/pb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,12 +16,13 @@ CREATE TABLE IF NOT EXISTS resource_owners (
     resource_type TEXT NOT NULL,
     resource_name TEXT NOT NULL,
     owner_email   TEXT NOT NULL,
-    PRIMARY KEY (resource_type, resource_name)
+    PRIMARY KEY (resource_type, resource_name, owner_email)
 );`
 
 // OwnerStore is a SQLite-backed implementation of identifier.OwnerStore.
 //
-// Each row maps a (resource_type, resource_name) pair to an owner email.
+// Each row maps a (resource_type, resource_name, owner_email) triple to one
+// ownership grant. Multiple rows for the same resource represent co-owners.
 // Replace this with a gRPC-backed implementation to support distributed
 // ownership checks across multiple Identifier nodes.
 type OwnerStore struct {
@@ -49,31 +48,38 @@ func (s *OwnerStore) Close() error {
 	return s.db.Close()
 }
 
-// Register associates a resource (type+name) with an owner email.
-// Calling Register again for the same resource replaces the existing owner.
+// Register grants ownership of a resource (type+name) to ownerEmail.
+// Calling Register again for the same (resource, email) triple is a no-op.
 func (s *OwnerStore) Register(ctx context.Context, resourceType, resourceName, ownerEmail string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO resource_owners (resource_type, resource_name, owner_email) VALUES (?, ?, ?)`,
+		`INSERT OR IGNORE INTO resource_owners (resource_type, resource_name, owner_email) VALUES (?, ?, ?)`,
 		resourceType, resourceName, ownerEmail,
 	)
 	return err
 }
 
-// Identify returns an Identity whose Id and Name are the owner email of the
-// given resource. Returns codes.NotFound if no owner is registered.
-func (s *OwnerStore) Identify(ctx context.Context, res *pb.Resource) (*pb.Identity, error) {
-	var email string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT owner_email FROM resource_owners WHERE resource_type = ? AND resource_name = ?`,
+// Owners returns all owner identities for the given resource.
+// Returns an empty slice (not an error) when no owners are registered;
+// the server translates an empty slice to codes.NotFound.
+func (s *OwnerStore) Owners(ctx context.Context, res *pb.Resource) ([]*pb.Identity, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT owner_email FROM resource_owners WHERE resource_type = ? AND resource_name = ? ORDER BY owner_email`,
 		res.GetType(), res.GetName(),
-	).Scan(&email)
-	if err == sql.ErrNoRows {
-		return nil, status.Errorf(codes.NotFound, "no owner for %s/%s", res.GetType(), res.GetName())
-	}
+	)
 	if err != nil {
-		return nil, fmt.Errorf("querying owner: %w", err)
+		return nil, fmt.Errorf("querying owners: %w", err)
 	}
-	return &pb.Identity{Id: email, Name: email}, nil
+	defer rows.Close()
+
+	var owners []*pb.Identity
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, fmt.Errorf("scanning owner: %w", err)
+		}
+		owners = append(owners, &pb.Identity{Id: email, Name: email})
+	}
+	return owners, rows.Err()
 }
 
 var _ identifier.OwnerStore = (*OwnerStore)(nil)
