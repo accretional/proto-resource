@@ -4,6 +4,9 @@ package resource;
 
 option go_package = "github.com/accretional/proto-resource/pb";
 
+import "identity.proto";
+import "resource.proto";
+
 service Identifier {
   // If successful, ultimately returns a resource with a token inside of it owned by the authenticated user, with resource info for Identity.name (eg a user, or group, etc) embedded
   // Those help inform the resource targets of a subsequent Plan92.CreateSession (authorization)

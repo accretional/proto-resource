@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package identifier;
+package resource;
 
 option go_package = "github.com/accretional/proto-resource/pb";
 

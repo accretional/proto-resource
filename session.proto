@@ -4,6 +4,9 @@ package resource;
 
 option go_package = "github.com/accretional/proto-resource/pb";
 
+import "resource.proto";
+import "openmode.proto";
+
 message Session {
   // Encodes a token with name=<secret> and owners=<provenance> stemming from the user's Identity they used to Authenticate with via the Identifier
   Resource user = 1;
