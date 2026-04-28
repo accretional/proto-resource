@@ -61,7 +61,7 @@ func (s *identifierServer) Authenticate(stream grpc.BidiStreamingServer[pb.Ident
 	return s.authHandler.Handle(stream)
 }
 
-func (s *identifierServer) Authority(ctx context.Context, req *pb.Identity) (*pb.Identity, error) {
+func (s *identifierServer) localAuthority() *pb.Identity {
 	return &pb.Identity{
 		Id:   "0",
 		Name: s.authorityName,
@@ -71,10 +71,40 @@ func (s *identifierServer) Authority(ctx context.Context, req *pb.Identity) (*pb
 				Name: s.ownerName,
 			},
 		},
-	}, nil
+	}
+}
+
+func (s *identifierServer) Authority(ctx context.Context, req *pb.Identity) (*pb.Identity, error) {
+	name := req.GetName()
+
+	// Empty request or the server's own authority name: always local.
+	if name == "" || name == s.authorityName {
+		return s.localAuthority(), nil
+	}
+
+	if s.ownerStore != nil {
+		local, err := s.ownerStore.IsLocal(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if local {
+			return s.localAuthority(), nil
+		}
+		// Name is not locally registered. Remote authority discovery is not
+		// yet implemented; callers should treat this as "authority unknown".
+		return nil, status.Errorf(codes.NotFound,
+			"no local authority for %q; remote authority lookup not yet implemented", name)
+	}
+
+	// No owner store configured: single-server mode, claim local for everything.
+	return s.localAuthority(), nil
 }
 
 func (s *identifierServer) Identify(ctx context.Context, req *pb.Resource) (*pb.Identity, error) {
+	// The "system" resource resolves to this service's own identity.
+	if req.GetName() == "system" {
+		return s.localAuthority(), nil
+	}
 	if s.ownerStore == nil {
 		return nil, status.Error(codes.Unimplemented, "Identify not configured")
 	}

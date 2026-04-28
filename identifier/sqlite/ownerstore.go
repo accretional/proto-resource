@@ -58,6 +58,20 @@ func (s *OwnerStore) Register(ctx context.Context, resourceType, resourceName, o
 	return err
 }
 
+// IsLocal reports whether any resource with the given name is registered,
+// regardless of type. Used by Authority to confirm local responsibility.
+func (s *OwnerStore) IsLocal(ctx context.Context, name string) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM resource_owners WHERE resource_name = ?`,
+		name,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("checking local: %w", err)
+	}
+	return count > 0, nil
+}
+
 // Owners returns all owner identities for the given resource.
 // Returns an empty slice (not an error) when no owners are registered;
 // the server translates an empty slice to codes.NotFound.

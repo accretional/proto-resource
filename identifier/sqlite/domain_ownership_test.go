@@ -262,6 +262,36 @@ func TestDomainOwnership_IdentifyWithNoStoreReturnsUnimplemented(t *testing.T) {
 	}
 }
 
+// --- Authority integration tests ---
+
+// TestAuthority_RegisteredDomainIsLocal verifies that Authority returns
+// local_authority for a domain that has at least one owner in the store.
+func TestAuthority_RegisteredDomainIsLocal(t *testing.T) {
+	store := openStore(t, [][2]string{{"example.com", "alice@example.com"}})
+	srv := newServer("alice@example.com", store)
+
+	resp, err := srv.Authority(context.Background(), &pb.Identity{Name: "example.com"})
+	if err != nil {
+		t.Fatalf("Authority(example.com): %v", err)
+	}
+	if resp.GetLocalAuthority() == nil {
+		t.Error("expected LocalAuthority for registered domain")
+	}
+}
+
+// TestAuthority_UnregisteredDomainReturnsNotFound verifies that Authority
+// returns codes.NotFound for a name not in the store, cleanly deferring
+// remote authority lookup to a future implementation.
+func TestAuthority_UnregisteredDomainReturnsNotFound(t *testing.T) {
+	store := openStore(t, nil)
+	srv := newServer("alice@example.com", store)
+
+	_, err := srv.Authority(context.Background(), &pb.Identity{Name: "unknown.com"})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("code = %v, want NotFound", status.Code(err))
+	}
+}
+
 // TestDomainOwnership_SubdomainIsDistinctResource verifies that a subdomain
 // can have a different owner from its apex, supporting delegated ownership.
 func TestDomainOwnership_SubdomainIsDistinctResource(t *testing.T) {

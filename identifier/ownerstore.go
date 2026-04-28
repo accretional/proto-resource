@@ -18,7 +18,11 @@ import (
 // dedicated HasAccess RPC would be needed for a proper any-of check over
 // multiple owners.
 type OwnerStore interface {
+	// Owners returns all owner identities for the given resource.
 	Owners(ctx context.Context, res *pb.Resource) ([]*pb.Identity, error)
+	// IsLocal reports whether any resource with the given name is registered
+	// in this store. Used by Authority to determine local vs remote authority.
+	IsLocal(ctx context.Context, name string) (bool, error)
 }
 
 // WithOwnerStore configures the store used by the Identify RPC.
