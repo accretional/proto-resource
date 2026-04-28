@@ -19,6 +19,7 @@ type AuthenticateHandler interface {
 type identifierServer struct {
 	pb.UnimplementedIdentifierServer
 	authHandler   AuthenticateHandler
+	ownerStore    OwnerStore
 	authorityName string
 	ownerName     string
 }
@@ -74,5 +75,8 @@ func (s *identifierServer) Authority(ctx context.Context, req *pb.Identity) (*pb
 }
 
 func (s *identifierServer) Identify(ctx context.Context, req *pb.Resource) (*pb.Identity, error) {
-	return nil, status.Error(codes.Unimplemented, "Identify not yet implemented")
+	if s.ownerStore == nil {
+		return nil, status.Error(codes.Unimplemented, "Identify not configured")
+	}
+	return s.ownerStore.Identify(ctx, req)
 }

@@ -14,7 +14,8 @@ service Identifier {
   rpc Authenticate(stream Identity) returns(stream Resource);
   // Determine if the resource of this name belongs to this server, and if so, its local identity, if not, a remote authority
   rpc Authority(Identity) returns(Identity);
-  // Request the identity of the owner of this resource
+  // Request the identity of the owner of this resource.
+  // Returns codes.NotFound when no owners are registered.
   // Can also be used to check the identity of this service/identity provider, by asking about "system"/id=0
   rpc Identify(Resource) returns(Identity);
 }
