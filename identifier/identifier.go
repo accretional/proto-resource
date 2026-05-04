@@ -20,6 +20,7 @@ type identifierServer struct {
 	pb.UnimplementedIdentifierServer
 	authHandler   AuthenticateHandler
 	ownerStore    OwnerStore
+	resolvers     []ResourceResolver
 	authorityName string
 	ownerName     string
 }
@@ -105,15 +106,35 @@ func (s *identifierServer) Identify(ctx context.Context, req *pb.Resource) (*pb.
 	if req.GetName() == "system" {
 		return s.localAuthority(), nil
 	}
-	if s.ownerStore == nil {
+
+	if s.ownerStore == nil && len(s.resolvers) == 0 {
 		return nil, status.Error(codes.Unimplemented, "Identify not configured")
 	}
-	owners, err := s.ownerStore.Owners(ctx, req)
-	if err != nil {
-		return nil, err
+
+	// Local store wins over dynamic resolvers — explicit registration takes priority.
+	if s.ownerStore != nil {
+		owners, err := s.ownerStore.Owners(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if len(owners) > 0 {
+			return owners[0], nil
+		}
 	}
-	if len(owners) == 0 {
-		return nil, status.Errorf(codes.NotFound, "no owner for %s/%s", req.GetType(), req.GetName())
+
+	// Fall through to type-specific resolvers (e.g. DNS SOA for domains).
+	for _, r := range s.resolvers {
+		if !r.CanResolve(req) {
+			continue
+		}
+		owners, err := r.Resolve(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if len(owners) > 0 {
+			return owners[0], nil
+		}
 	}
-	return owners[0], nil
+
+	return nil, status.Errorf(codes.NotFound, "no owner for %s/%s", req.GetType(), req.GetName())
 }
