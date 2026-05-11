@@ -30,7 +30,7 @@ func TestCanResolve(t *testing.T) {
 	}
 }
 
-// TestResolve_Accretional verifies SOA RNAME → owner email via live DNS.
+// TestResolve_Accretional verifies URI record → owner email via live DNS.
 // Skipped with -short.
 func TestResolve_Accretional(t *testing.T) {
 	if testing.Short() {
@@ -46,17 +46,17 @@ func TestResolve_Accretional(t *testing.T) {
 		t.Fatalf("Resolve(accretional.com): %v", err)
 	}
 	if len(owners) == 0 {
-		t.Fatal("expected at least one owner from SOA RNAME, got none")
+		t.Fatal("expected at least one owner from URI records, got none")
 	}
 	email := owners[0].GetId()
 	if email == "" {
 		t.Error("owner Id (email) is empty")
 	}
-	t.Logf("SOA owner: %s", email)
+	t.Logf("URI owner: %s", email)
 }
 
 // TestIdentifyServer_DNSFallback verifies that an IdentifierServer with no
-// OwnerStore but a DNS resolver returns an owner from SOA for a live domain.
+// OwnerStore but a DNS resolver returns an owner from URI records for a live domain.
 func TestIdentifyServer_DNSFallback(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping network-dependent test in -short mode")
